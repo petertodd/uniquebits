@@ -12,6 +12,29 @@ weren't being personally targetted with malware. Or this principle can also be
 used as the basis for a certificate transparency scheme.
 
 
+How it works
+============
+
+Uniquebits publishes hashes of data, signed by PGP signatures, on the Bitcoin
+blockchain encoded into transactions. Each hash is associated with a specific
+topic. By scanning the blockchain the complete set of all published hashes from
+a given pubkey for a given topic can be obtained. Third-parties relying on that
+data can then check their copy against the published hashes. Missing records
+are immediately apparent, possibly indicating fraud. (e.g. a bank attempting to
+keep two sets of books)
+
+Note that the PGP signatures are essential! Simply publishing the hashes
+themselves is not sufficient - that's timestamping rather than
+proof-of-publication, and only proves that data existed prior to some time;
+timestamping says nothing about whether or not *conflicting* versions of the
+data exist. Unfortunately there is a tremendous amount of misinformation out
+there regarding this point. Secondly it is not possible to trustlessly
+outsource this publication, for example with Factom's merkle tree scheme. If
+you're protocol involves a third-party in the publication that third-party can
+put you in a position of being unable to prove you did not commit fraud as you
+can't control what publications they make on your behalf.
+
+
 Usage
 =====
 
@@ -43,6 +66,9 @@ TODO
   p_i+1 As miners don't know that key, they can't censor the next publication,
   however revealing that key still allows anyone to securely verify the next
   publication.
+
+* Provide the option of publishing via a merkle binary prefix tree to combine
+  multiple publications into one.
 
 * Use Isis's python3-gnupg
 
