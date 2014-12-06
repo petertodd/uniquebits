@@ -12,8 +12,11 @@
 UNIBITS_VERSION = '0.1.0'
 
 import argparse
+import gnupg
+import io
 import logging
 import os
+import tempfile
 
 import bitcoin.rpc
 
@@ -72,8 +75,12 @@ def cmd_publish(args):
 
     args.title = args.title.encode('utf8')
 
+    gpg = gnupg.GPG()
+    pgp_sig = gpg.sign(args.hash, binary=True, detach=True)
+    pgp_sig = pgp_sig.data
+
     signed_record = SignedRecord(Record(args.title, args.hash),
-                                 b"PGP YO!")
+                                 pgp_sig)
 
     # signed record is published to the blockchain in a scriptSig; create a
     # redeemScript that can only be satisfied by it
@@ -138,6 +145,35 @@ def cmd_scan(args):
                 (signed_record.record.title, b2x(signed_record.record.hash),
                  signed_record.sig))
 
+        # Verify sig.
+        gpg = gnupg.GPG()
+
+        # Sadly we need to write the hash to disk first.
+        with tempfile.NamedTemporaryFile() as hash_fd:
+            hash_fd.write(signed_record.record.hash)
+            hash_fd.flush()
+
+            verified = gpg.verify_file(io.BytesIO(signed_record.sig), hash_fd.name)
+
+            if not verified:
+                logging.warn('Bad sig! %s' % b2x(signed_record.sig))
+
+        path = os.path.join(args.datadir, b2x(publisher_fingerprint), args.topic)
+        os.makedirs(path, exist_ok=True)
+        data_path = os.path.join(path, '.data')
+        os.makedirs(data_path, exist_ok=True)
+
+        topic_filename = os.path.join(path, signed_record.record.title.decode('utf8'))
+        try:
+            with open(topic_filename + '.sig', 'xb') as sig_fd:
+                sig_fd.write(signed_record.sig)
+        except FileExistsError:
+            logging.warn('Invalid publish tx; duplicated!')
+            return
+
+        os.symlink(os.path.join('.data', b2x(signed_record.record.hash)), topic_filename)
+
+
     # scan blockchain
     i = args.height
     while i <= args.proxy.getblockcount():
@@ -183,7 +219,7 @@ def make_arg_parser():
 
     publish_parser = subparsers.add_parser('publish',
                 help="Publish to a topic")
-    publish_parser.add_argument('--topic', type=str, default='',
+    publish_parser.add_argument('--topic', type=str, default='_',
                 help='Topic')
     publish_parser.add_argument('fingerprint', type=str,
                 help='Publisher fingerprint')
@@ -195,7 +231,7 @@ def make_arg_parser():
 
     scan_parser = subparsers.add_parser('scan',
                 help="Scan topic")
-    scan_parser.add_argument('--topic', type=str, default='',
+    scan_parser.add_argument('--topic', type=str, default='_',
                 help='Topic')
     scan_parser.add_argument('--height', type=int, default=0,
                 help='Starting height')
