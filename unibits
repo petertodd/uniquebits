@@ -15,3 +15,7 @@ import sys
 
 if sys.version_info.major != 3:
     raise ImportError("Python3 required")
+
+
+import uniquebits._unibits
+uniquebits._unibits.main(sys.argv)
