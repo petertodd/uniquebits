@@ -15,8 +15,95 @@ import argparse
 import logging
 import os
 
-import bitcoin.core
 import bitcoin.rpc
+
+from bitcoin.core import *
+from bitcoin.core.script import *
+from bitcoin.core.scripteval import *
+from bitcoin.core.serialize import *
+from bitcoin.wallet import *
+
+class Record(bitcoin.core.serialize.ImmutableSerializable):
+    __slots__ = ['title', 'hash']
+
+    def __init__(self, title, hash):
+        object.__setattr__(self, 'title', title)
+        object.__setattr__(self, 'hash', hash)
+
+    @classmethod
+    def stream_deserialize(cls, f):
+        title = BytesSerializer.stream_deserialize(f)
+        hash = ser_read(f,32)
+        return cls(hash, title)
+
+    def stream_serialize(self, f):
+        BytesSerializer.stream_serialize(self.title, f)
+        assert len(self.hash) == 32
+        f.write(self.hash)
+
+class SignedRecord(bitcoin.core.serialize.ImmutableSerializable):
+    __slots__ = ['record', 'sig']
+
+    def __init__(self, record, sig):
+        object.__setattr__(self, 'record', record)
+        object.__setattr__(self, 'sig', sig)
+
+    @classmethod
+    def stream_deserialize(cls, f):
+        record = Record.stream_deserialize(f)
+        sig = BytesSerializer.stream_deserialize(f)
+        return cls(record, sig)
+
+    def stream_serialize(self, f):
+        Record.stream_serialize(self.record, f)
+        BytesSerializer.stream_serialize(self.sig, f)
+
+def cmd_publish(args):
+    h = Hash(b'correct horse battery staple')
+    seckey = CBitcoinSecret.from_secret_bytes(h)
+
+    publisher_fingerprint = x('37EC7D7B0A217CDB4B4E007E7FAB114267E4FA04')
+    bait_scriptPubKey = CScript([OP_HASH160, publisher_fingerprint, OP_EQUAL])
+
+    signed_record = SignedRecord(Record(b"diana's thoughts", b'\x00'*32),
+                                 b"PGP YO!")
+
+    # signed record is published to the blockchain in a scriptSig; create a
+    # redeemScript that can only be satisfied by it
+    serialized_signed_record = signed_record.serialize()
+    redeemScript = CScript([seckey.pub, OP_CHECKSIGVERIFY,
+                            OP_HASH160, Hash160(serialized_signed_record), OP_EQUALVERIFY,
+                            OP_DEPTH, 0, OP_EQUAL]) # stop mutability
+
+    # create our output
+    addr = P2SHBitcoinAddress.from_scriptPubKey(redeemScript.to_p2sh_scriptPubKey())
+    txid = args.proxy.sendtoaddress(addr, 0.001*COIN)
+
+    prevout = None
+    tx = args.proxy.getrawtransaction(txid)
+    for i, txout in enumerate(tx.vout):
+        if txout.scriptPubKey == addr.to_scriptPubKey():
+            prevout = COutPoint(tx.GetHash(), i)
+            break
+    assert prevout is not None
+
+    # spend that output to the bait address
+    tx = CTransaction([CTxIn(prevout)],
+                      [CTxOut(0.00001*COIN, bait_scriptPubKey)])
+
+    sighash = SignatureHash(redeemScript, tx, 0, SIGHASH_ALL)
+    sig = seckey.sign(sighash) + bytes([SIGHASH_ALL])
+    scriptSig = CScript([serialized_signed_record, sig, redeemScript])
+
+    signed_tx = CTransaction([CTxIn(prevout, scriptSig)],
+                             [CTxOut(0.00001*COIN, bait_scriptPubKey)])
+
+    VerifyScript(signed_tx.vin[0].scriptSig, redeemScript.to_p2sh_scriptPubKey(),
+                 tx, 0, (SCRIPT_VERIFY_P2SH,))
+
+    txid = args.proxy.sendrawtransaction(signed_tx)
+
+    print(b2lx(txid))
 
 def make_arg_parser():
     # Global arguments
@@ -45,6 +132,10 @@ def make_arg_parser():
     parser.add_argument('--version', action='version', version=UNIBITS_VERSION)
 
     subparsers = parser.add_subparsers()
+
+    publish_parser = subparsers.add_parser('publish',
+                help="Publish to a topic")
+    publish_parser.set_defaults(cmd_func=cmd_publish)
 
     return parser
 
