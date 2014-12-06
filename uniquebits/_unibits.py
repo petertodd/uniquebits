@@ -34,7 +34,7 @@ class Record(bitcoin.core.serialize.ImmutableSerializable):
     def stream_deserialize(cls, f):
         title = BytesSerializer.stream_deserialize(f)
         hash = ser_read(f,32)
-        return cls(hash, title)
+        return cls(title, hash)
 
     def stream_serialize(self, f):
         BytesSerializer.stream_serialize(self.title, f)
@@ -58,14 +58,21 @@ class SignedRecord(bitcoin.core.serialize.ImmutableSerializable):
         Record.stream_serialize(self.record, f)
         BytesSerializer.stream_serialize(self.sig, f)
 
+def make_bait_scriptPubKey(fingerprint, topic):
+    bait = Hash160(fingerprint + topic)
+    return CScript([OP_HASH160, bait, OP_EQUAL])
+
 def cmd_publish(args):
     h = Hash(b'correct horse battery staple')
     seckey = CBitcoinSecret.from_secret_bytes(h)
 
-    publisher_fingerprint = x('37EC7D7B0A217CDB4B4E007E7FAB114267E4FA04')
-    bait_scriptPubKey = CScript([OP_HASH160, publisher_fingerprint, OP_EQUAL])
+    args.publisher_fingerprint = x(args.fingerprint.replace(' ',''))
+    args.topic = args.topic.encode('utf8')
+    bait_scriptPubKey = make_bait_scriptPubKey(args.publisher_fingerprint, args.topic)
 
-    signed_record = SignedRecord(Record(b"diana's thoughts", b'\x00'*32),
+    args.title = args.title.encode('utf8')
+
+    signed_record = SignedRecord(Record(args.title, args.hash),
                                  b"PGP YO!")
 
     # signed record is published to the blockchain in a scriptSig; create a
@@ -105,6 +112,47 @@ def cmd_publish(args):
 
     print(b2lx(txid))
 
+def cmd_scan(args):
+    publisher_fingerprint = x(args.fingerprint.replace(' ',''))
+    topic = args.topic.encode('utf8')
+    bait_scriptPubKey = make_bait_scriptPubKey(publisher_fingerprint, topic)
+
+    def decode_tx(tx):
+        scriptSig = tuple(tx.vin[0].scriptSig)
+        if len(scriptSig) != 3:
+            logging.info('Invalid publish tx; len(tx.vin[0].scriptSig) != 3')
+            return
+
+        serialized_signed_record = scriptSig[0]
+        if not isinstance(serialized_signed_record, bytes):
+            logging.info('Invalid publish tx; scriptSig does not start with PUSHDATA')
+            return
+
+        try:
+            signed_record = SignedRecord.deserialize(serialized_signed_record)
+        except SerializationError as err:
+            logging.info('Invalid publish tx; %r' % exp)
+            return
+
+        logging.info('Found signed record! Title: %r Hash: %r Sig: %r' % \
+                (signed_record.record.title, b2x(signed_record.record.hash),
+                 signed_record.sig))
+
+    # scan blockchain
+    i = args.height
+    while i <= args.proxy.getblockcount():
+        blockhash = args.proxy.getblockhash(i)
+        logging.info('Block %d %s' % (i, b2lx(blockhash)))
+        block = args.proxy.getblock(args.proxy.getblockhash(i))
+
+        for tx in block.vtx:
+            if tx.vout[0].scriptPubKey == bait_scriptPubKey:
+                logging.info('Found bait! %s' % b2lx(tx.GetHash()))
+                decode_tx(tx)
+
+
+        i += 1
+
 def make_arg_parser():
     # Global arguments
 
@@ -135,7 +183,25 @@ def make_arg_parser():
 
     publish_parser = subparsers.add_parser('publish',
                 help="Publish to a topic")
+    publish_parser.add_argument('--topic', type=str, default='',
+                help='Topic')
+    publish_parser.add_argument('fingerprint', type=str,
+                help='Publisher fingerprint')
+    publish_parser.add_argument('title', type=str,
+                help='Title')
+    publish_parser.add_argument('hash', type=x,
+                help='Hash')
     publish_parser.set_defaults(cmd_func=cmd_publish)
+
+    scan_parser = subparsers.add_parser('scan',
+                help="Scan topic")
+    scan_parser.add_argument('--topic', type=str, default='',
+                help='Topic')
+    scan_parser.add_argument('--height', type=int, default=0,
+                help='Starting height')
+    scan_parser.add_argument('fingerprint', type=str,
+                help='Publisher fingerprint')
+    scan_parser.set_defaults(cmd_func=cmd_scan)
 
     return parser
 
