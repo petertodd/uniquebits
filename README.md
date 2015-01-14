@@ -30,7 +30,7 @@ timestamping says nothing about whether or not *conflicting* versions of the
 data exist. Unfortunately there is a tremendous amount of misinformation out
 there regarding this point. Secondly it is not possible to trustlessly
 outsource this publication, for example with Factom's merkle tree scheme. If
-you're protocol involves a third-party in the publication that third-party can
+your protocol involves a third-party in the publication that third-party can
 put you in a position of being unable to prove you did not commit fraud as you
 can't control what publications they make on your behalf.
 
